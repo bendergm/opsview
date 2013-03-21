@@ -1,0 +1,10 @@
+Opsview scripts
+==========
+
+This repository contains scripts that I have compiled for personal use.  They are free to modify for your own use but I will attempt to make them as generic as possible.
+
+Instructions
+--------------
+ 1. Copy check_* to /use/local/nagios/libexec
+ 2. chmod +x the files
+ 3. chown to your nagios user

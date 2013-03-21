@@ -1,0 +1,267 @@
+#!/bin/bash
+
+#   Author:  Jonathan Kaiser
+#   Date:    2013
+#   Purpose: Standard SNMP OID check for ups devices and returns perfdata compatible format
+#   Dependances: net-snmp
+#   Version: 0.1
+
+## Devault Variables
+HOSTNAME=
+SNMP_VERSION=2c
+COMMUNITY=public
+OUTPUT_PERFDATA=false
+TIMEOUT=1
+RETRY=1
+TYPE_CHECK=
+
+WARN_THRESHOLD=
+CRIT_THRESHOLD=
+THRESHOLDS_SET=false
+Default_remain_warn=25
+Default_remain_crit=15
+Default_load_warn=80
+Default_load_crit=90
+
+OK=0
+WARNING=1
+CRITICAL=2
+UNKNOWN=3
+OUTPUT_DETAIL=
+
+
+## Help declaration
+function help ()
+{
+    echo "use : $0 -H hostname -C community -[i|s|o|r|l] -w ## -c ## -p -h"
+    echo ""
+    echo "  -H  : hostname or IP address of ups device"
+    echo "  -C  : snmp community (default:public)"
+    echo ""
+    echo "  -i  : UPS information"
+    echo "  -s  : Battery status"
+    echo "  -o  : UPS output source"
+    echo "  -r  : Battery remaining in minutes"
+    echo "          threshold in minutes left"
+    echo "          default: -w $Default_remain_warn -c $Default_remain_crit"
+    echo "  -l  : Current load"
+    echo "          threshold in percentage"
+    echo "          default: -w $Default_load_warn -c $Default_load_crit"
+    echo ""
+    echo "  -w  : Warning threshhold"
+    echo "  -c  : Critical threshold"
+    echo ""
+    echo "  -p  : Include perfdata"
+    echo ""
+    echo "  -h  : print this message"
+    exit $UNKNOWN
+}
+
+while getopts "H:C:isorlw:c:h" Input;
+do
+    case ${Input} in
+    H)      HOSTNAME=${OPTARG};;
+    C)      COMMUNITY=${OPTARG};;
+    i)      TYPE_CHECK=info;;
+    s)      TYPE_CHECK=stat;;
+    o)      TYPE_CHECK=output;;
+    r)      TYPE_CHECK=remaining;;
+    l)      TYPE_CHECK=load;;
+    w)      WARN_THRESHOLD=${OPTARG};;
+    c)      CRIT_THRESHOLD=${OPTARG};;
+    p)      OUTPUT_PERFDATA=true;;
+    h)      help;;
+    *)      echo "Invalid input"
+            exit $UNKNOWN
+            ;;
+    esac
+done
+
+if [ "$WARN_THRESHOLD" != "" ]  && [ "$CRIT_THRESHOLD" != "" ]; then
+    THRESHOLDS_SET=true
+fi
+
+get="snmpget -c "$COMMUNITY" -v "$SNMP_VERSION" -t "$TIMEOUT" -r "$RETRY" -O qv "$HOSTNAME" "
+
+# Used to check for connectrivity
+sysDescr=".1.3.6.1.2.1.1.1.0"
+# upsIdent
+upsIdentManufacturer=".1.3.6.1.2.1.33.1.1.1.0"
+upsIdentModel=".1.3.6.1.2.1.33.1.1.2.0"
+upsIdentAgentSoftwareVersion=".1.3.6.1.2.1.33.1.1.4.0"
+upsIdentName=".1.3.6.1.2.1.33.1.1.5.0"
+# upsBattery
+upsBatteryStatus=".1.3.6.1.2.1.33.1.2.1.0"
+upsSecondsOnBattery=".1.3.6.1.2.1.33.1.2.2.0"
+upsEstimatedMinutesRemaining=".1.3.6.1.2.1.33.1.2.3.0"
+upsEstimatedChargeRemaining=".1.3.6.1.2.1.33.1.2.4.0"
+upsBatteryVoltage=".1.3.6.1.2.1.33.1.2.5.0"
+upsBatteryTemperature=".1.3.6.1.2.1.33.1.2.7.0"
+#upsOutput
+upsOutputSource=".1.3.6.1.2.1.33.1.4.1.0"
+upsOutputNumLines=".1.3.6.1.2.1.33.1.4.3.0"
+upsOutputLineTable=".1.3.6.1.2.1.33.1.4.4.1"
+
+# Connectivity Check
+check=`$get$sysDescr 2>&1`
+if [[ $check == Timeout* ]]; then
+    echo $check
+    exit $UNKNOWN
+fi
+
+
+function info () {
+    UPS_Manufacturer=`$get$upsIdentManufacturer 2>&1`
+    UPS_Model=`$get$upsIdentModel 2>&1`
+    UPS_Version=`$get$upsIdentAgentSoftwareVersion 2>&1`
+    UPS_Device=`$get$upsIdentName 2>&1`
+    
+    OUTPUT_DETAIL=$UPS_Device": "$UPS_Manufacturer" "$UPS_Model" v:"$UPS_Version
+    RET_CODE=$OK
+    OUTPUT_PERFDATA=false
+}
+
+
+function stat () {
+    BAT_STAT=`$get$upsBatteryStatus 2>&1`
+    
+    case $BAT_STAT in
+        1)
+            OUTPUT_DETAIL="battery in unknown state "
+            RET_CODE=$UNKNOWN;;
+        2)
+            OUTPUT_DETAIL="battery normal "
+            RET_CODE=$OK;;
+        3)
+            OUTPUT_DETAIL="battery low "
+            RET_CODE=$WARNING;;
+        4)
+            OUTPUT_DETAIL="battery depleted "
+            RET_CODE=$CRITICAL;;
+        *)
+            OUTPUT_DETAIL="$get$upsBatteryStatus = $BAT_STAT "
+            RET_CODE=$UNKNOWN;;
+    esac
+    PERFDATA="upsBatteryStatus=$BAT_STAT"
+}
+
+
+function output () {
+    BAT_OUTSOURCE=`$get$upsOutputSource 2>&1`
+    case $BAT_OUTSOURCE in
+        1)
+            OUTPUT_DETAIL="other(1) "
+            RET_CODE=$UNKNOWN;;
+        2)
+            OUTPUT_DETAIL="none(2) - No power being delivered "
+            RET_CODE=$CRITICAL;;
+        3)
+            OUTPUT_DETAIL="normal(3) power output "
+            RET_CODE=$OK;;
+        4)
+            OUTPUT_DETAIL="bypass(4) mode "
+            RET_CODE=$WARNING;;
+        5)
+            OUTPUT_DETAIL="On battery(5) "
+            RET_CODE=$WARNING;;
+        6)
+            OUTPUT_DETAIL="booster(6) "
+            RET_CODE=$UNKNOWN;;
+        7)
+            OUTPUT_DETAIL="reducer(7) "
+            RET_CODE=$UNKNOWN;;
+        *)
+            OUTPUT_DETAIL="Unexpected output: $get$upsOutputSource = $BAT_SOURCE "
+            RET_CODE=$UNKNOWN;;
+    esac
+    PERFDATA="upsOutputSource=$BAT_OUTSOURCE"
+}
+
+
+function remaining () {
+    MIN_LEFT=`$get$upsEstimatedMinutesRemaining 2>&1`
+    PER_LEFT=`$get$upsEstimatedChargeRemaining 2>&1`
+    if  ! $THRESHOLDS_SET ; then
+        WARN_THRESHOLD=$Default_remain_warn
+        CRIT_THRESHOLD=$Default_remain_crit
+    fi
+    if [ "$MIN_LEFT" -lt "$WARN_THRESHOLD" ] ; then
+        if [ "$MIN_LEFT" -lt "$CRIT_THRESHOLD" ] ; then
+            RET_CODE=$CRITICAL
+        else
+            RET_CODE=$WARNING
+        fi
+    else
+        RET_CODE=$OK
+    fi
+    OUTPUT_DETAIL="$MIN_LEFT minutes left at $PER_LEFT""% "
+    PERFDATA="upsEstimatedMinutesRemaining=$MIN_LEFT upsEstimatedChargeRemaining=$PER_LEFT""%"
+}
+
+
+function load () {
+    NUM_LINES=`$get$upsOutputNumLines 2>&1`
+    if ! [[ "$NUM_LINES" =~ ^[0-9]+$ ]] ; then
+        # The response is not a number!  Assume theres one line...
+        NUM_LINES=1
+    fi
+    
+    if  ! $THRESHOLDS_SET ; then
+        WARN_THRESHOLD=$Default_load_warn
+        CRIT_THRESHOLD=$Default_load_crit
+        THRESHOLDS_SET=true
+    fi
+    
+    TOP_RET_CODE=$OK
+    
+    #  Add check for WARN_THRESHOLD < CRIT_THRESHOLD and both are [0..100]
+    for ((i=1;i<=$NUM_LINES;i++))
+    do
+        LOAD_PER=`$get$upsOutputLineTable.5.$i 2>&1`
+        if [ "$LOAD_PER" -gt $WARN_THRESHOLD ] && [ "$TOP_RET_CODE" -lt "$CRITICAL" ]; then
+            if [ "$LOAD_PER" -gt $CRIT_THRESHOLD ]; then
+                TOP_RET_CODE=$CRITICAL
+            else
+              # Improve handling of multiple warnings, not just if theres >1 make it critical
+                if [ "$TOP_RET_CODE" -lt "$WARNING" ]; then
+                    TOP_RET_CODE=$WARNING
+                else
+                    TOP_RET_CODE=$CRITICAL
+                fi
+            fi
+        # else statement is just a confirming $CRITICAL
+        fi
+        OUTPUT_DETAIL=$OUTPUT_DETAIL"Line$i"":$LOAD_PER""% "
+        PERFDATA=$PERFDATA"upsOutputPercentLoad.$i""=$LOAD_PER""% "
+    done
+    RET_CODE=$TOP_RET_CODE
+}
+
+case ${TYPE_CHECK} in
+    info)       info;;
+    stat)       stat;;
+    output)     output;;
+    remaining)	remaining;;
+    load)       load;;
+    *)          exit $UNKNOWN;;
+esac
+
+case $RET_CODE in
+    0)
+        NAGIOS_OUT="OK: $OUTPUT_DETAIL";;
+    1)
+        NAGIOS_OUT="WARNING: $OUTPUT_DETAIL";;
+    2)
+        NAGIOS_OUT="CRITICAL: $OUTPUT_DETAIL";;
+    *)
+        NAGIOS_OUT="UNKNOWN: $OUTPUT_DETAIL";;
+esac
+
+if $OUTPUT_PERFDATA ; then
+       echo $NAGIOS_OUT"| "$PERFDATA
+else
+       echo $NAGIOS_OUT
+fi
+
+exit $RET_CODE
+
