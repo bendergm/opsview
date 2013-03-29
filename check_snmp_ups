@@ -14,6 +14,7 @@ OUTPUT_PERFDATA=false
 TIMEOUT=1
 RETRY=1
 TYPE_CHECK=
+SCALE=false
 
 WARN_THRESHOLD=
 CRIT_THRESHOLD=
@@ -33,43 +34,50 @@ OUTPUT_DETAIL=
 ## Help declaration
 function help ()
 {
-    echo "use : $0 -H hostname -C community -[i|s|o|r|l] -w ## -c ## -p -h"
+    echo "use : $0 -H hostname -C community -t [check type] -w ## -c ## -p -a -h"
     echo ""
     echo "  -H  : hostname or IP address of ups device"
     echo "  -C  : snmp community (default:public)"
     echo ""
-    echo "  -i  : UPS information"
-    echo "  -s  : Battery status"
-    echo "  -o  : UPS output source"
-    echo "  -r  : Battery remaining in minutes"
-    echo "          threshold in minutes left"
-    echo "          default: -w $Default_remain_warn -c $Default_remain_crit"
-    echo "  -l  : Current load"
-    echo "          threshold in percentage"
-    echo "          default: -w $Default_load_warn -c $Default_load_crit"
+    echo "    Check Type Options"
+    echo "        info  : UPS information"
+    echo "        status  : Battery status"
+    echo "        output  : UPS output source"
+    echo "        remain  : Battery remaining in minutes"
+    echo "                          threshold in minutes left"
+    echo "                          default: -w $Default_remain_warn -c $Default_remain_crit"
+    echo "        load  : Current load"
+    echo "                          threshold in percentage"
+    echo "                          default: -w $Default_load_warn -c $Default_load_crit"
     echo ""
     echo "  -w  : Warning threshhold"
     echo "  -c  : Critical threshold"
     echo ""
     echo "  -p  : Include perfdata"
+    echo "  -a  : Scale output by 1/10th, needed for Tripplite SNMPWEBCARD"
     echo ""
     echo "  -h  : print this message"
     exit $UNKNOWN
 }
 
-while getopts "H:C:isorlw:c:h" Input;
+while getopts "H:C:t:w:c:pah" Input;
 do
     case ${Input} in
     H)      HOSTNAME=${OPTARG};;
     C)      COMMUNITY=${OPTARG};;
-    i)      TYPE_CHECK=info;;
-    s)      TYPE_CHECK=stat;;
-    o)      TYPE_CHECK=output;;
-    r)      TYPE_CHECK=remaining;;
-    l)      TYPE_CHECK=load;;
+    t)      case ${OPTARG} in
+                info)      TYPE_CHECK=info;;
+                satus)      TYPE_CHECK=status;;
+                output)      TYPE_CHECK=output;;
+                remain)      TYPE_CHECK=remaining;;
+                load)      TYPE_CHECK=load;;
+                *)          echo "Please enter a valid Check Type option"
+                             exit $UNKNOWN
+                             ;;
     w)      WARN_THRESHOLD=${OPTARG};;
     c)      CRIT_THRESHOLD=${OPTARG};;
     p)      OUTPUT_PERFDATA=true;;
+    a)      SCALE=true;;
     h)      help;;
     *)      echo "Invalid input"
             exit $UNKNOWN
@@ -239,7 +247,7 @@ function load () {
 
 case ${TYPE_CHECK} in
     info)       info;;
-    stat)       stat;;
+    status)       stat;;
     output)     output;;
     remaining)	remaining;;
     load)       load;;
