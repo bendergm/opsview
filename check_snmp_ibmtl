@@ -99,7 +99,7 @@ function info () {
     TL_Build=`$get$shadowIdBuildNumber 2>&1`
     TL_URL=`$get$shadowIdURL 2>&1`
     
-    OUTPUT_DETAIL=$TL_Vendor" "$TL_Display" v:"$shadowIdBuildNumber" : "$shadowIdDescription
+    OUTPUT_DETAIL=$TL_Vendor" "$TL_Display" v:"$TL_Build" : "$TL_Desc
     RET_CODE=$OK
     OUTPUT_PERFDATA=false
 }
