@@ -93,11 +93,11 @@ fi
 
 
 function info () {
-    TL_Display=`$get$shadowIdDisplayName 2>&1`
-    TL_Desc=`$get$shadowIdDescription 2>&1`
-    TL_Vendor=`$get$shadowAgentVendor 2>&1`
-    TL_Build=`$get$shadowIdBuildNumber 2>&1`
-    TL_URL=`$get$shadowIdURL 2>&1`
+    TL_Display=$($get$shadowIdDisplayName 2>&1 | tr -d "\"")
+    TL_Desc=$($get$shadowIdDescription 2>&1 | tr -d "\"")
+    TL_Vendor=$($get$shadowAgentVendor 2>&1 | tr -d "\"")
+    TL_Build=$($get$shadowIdBuildNumber 2>&1 | tr -d "\"")
+    TL_URL=$($get$shadowIdURL 2>&1 | tr -d "\"")
     
     OUTPUT_DETAIL=$TL_Vendor" "$TL_Display" v:"$TL_Build" : "$TL_Desc
     RET_CODE=$OK
@@ -106,7 +106,7 @@ function info () {
 
 
 function stat () {
-    TL_STAT=`$get$shadowStatusGlobalStatus 2>&1`
+    TL_STAT=$($get$shadowStatusGlobalStatus 2>&1)
     
     case $TL_STAT in
         1)

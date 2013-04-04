@@ -8,3 +8,25 @@ Instructions
  1. Copy check_* to /use/local/nagios/libexec
  2. chmod +x the files
  3. chown to your nagios user
+ 
+ 
+ 
+ Icons
+ ====
+ 
+ Icons I have created/modified to look a bit better than the stock icon set.
+ 
+ Instructions
+ --------------
+  1. for each icon you'd like to use
+    a. copy the .png to the icons directory (default /usr/local/nagios/share/images/logos )
+    b. hosticon_admin add 'LOGO - [logo]' /usr/local/nagios/share/images/logos/[logo].png
+
+
+
+To Do
+====
+
+- script to add/update icons
+- more scripts!
+- more icons!

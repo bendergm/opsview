@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #   Author:  Jonathan Kaiser
-#   Date:    2013
+#   Date:    20121016ish
 #   Purpose: Standard SNMP OID check for ups devices and returns perfdata compatible format
 #   Dependances: net-snmp
 #   Version: 0.1
 
-## Devault Variables
+## Defaults
 HOSTNAME=
 SNMP_VERSION=2c
 COMMUNITY=public
@@ -14,7 +14,6 @@ OUTPUT_PERFDATA=false
 TIMEOUT=1
 RETRY=1
 TYPE_CHECK=
-SCALE=false
 
 WARN_THRESHOLD=
 CRIT_THRESHOLD=
@@ -30,54 +29,42 @@ CRITICAL=2
 UNKNOWN=3
 OUTPUT_DETAIL=
 
-
-## Help declaration
 function help ()
 {
-    echo "use : $0 -H hostname -C community -t [check type] -w ## -c ## -p -a -h"
+    echo "use : $0 -H hostname -C community -[i|s|o|r|l] -w ## -c ##"
     echo ""
     echo "  -H  : hostname or IP address of ups device"
     echo "  -C  : snmp community (default:public)"
     echo ""
-    echo "    Check Type Options"
-    echo "        info  : UPS information"
-    echo "        status  : Battery status"
-    echo "        output  : UPS output source"
-    echo "        remain  : Battery remaining in minutes"
-    echo "                          threshold in minutes left"
-    echo "                          default: -w $Default_remain_warn -c $Default_remain_crit"
-    echo "        load  : Current load"
-    echo "                          threshold in percentage"
-    echo "                          default: -w $Default_load_warn -c $Default_load_crit"
+    echo "  -i  : UPS information"
+    echo "  -s  : Battery status"
+    echo "  -o  : UPS output source"
+    echo "  -r  : Battery remaining in minutes"
+    echo "          threshold in minutes left"
+    echo "          default: -w $Default_remain_warn -c $Default_remain_crit"
+    echo "  -l  : Current load"
+    echo "          threshold in percentage"
+    echo "          default: -w $Default_load_warn -c $Default_load_crit"
     echo ""
     echo "  -w  : Warning threshhold"
     echo "  -c  : Critical threshold"
-    echo ""
-    echo "  -p  : Include perfdata"
-    echo "  -a  : Scale output by 1/10th, needed for Tripplite SNMPWEBCARD"
     echo ""
     echo "  -h  : print this message"
     exit $UNKNOWN
 }
 
-while getopts "H:C:t:w:c:pah" Input;
+while getopts "H:C:isorlw:c:h" Input;
 do
     case ${Input} in
     H)      HOSTNAME=${OPTARG};;
     C)      COMMUNITY=${OPTARG};;
-    t)      case ${OPTARG} in
-                info)      TYPE_CHECK=info;;
-                satus)      TYPE_CHECK=status;;
-                output)      TYPE_CHECK=output;;
-                remain)      TYPE_CHECK=remaining;;
-                load)      TYPE_CHECK=load;;
-                *)          echo "Please enter a valid Check Type option"
-                             exit $UNKNOWN
-                             ;;
+    i)      TYPE_CHECK=info;;
+    s)      TYPE_CHECK=stat;;
+    o)      TYPE_CHECK=output;;
+    r)      TYPE_CHECK=remaining;;
+    l)      TYPE_CHECK=load;;
     w)      WARN_THRESHOLD=${OPTARG};;
     c)      CRIT_THRESHOLD=${OPTARG};;
-    p)      OUTPUT_PERFDATA=true;;
-    a)      SCALE=true;;
     h)      help;;
     *)      echo "Invalid input"
             exit $UNKNOWN
@@ -125,6 +112,7 @@ function info () {
     UPS_Device=`$get$upsIdentName 2>&1`
     
     OUTPUT_DETAIL=$UPS_Device": "$UPS_Manufacturer" "$UPS_Model" v:"$UPS_Version
+    OUTPUT_DETAIL=$(echo $OUTPUT_DETAIL | tr -d "\"")
     RET_CODE=$OK
     OUTPUT_PERFDATA=false
 }
@@ -149,7 +137,8 @@ function stat () {
         *)
             OUTPUT_DETAIL="$get$upsBatteryStatus = $BAT_STAT "
             RET_CODE=$UNKNOWN;;
-    esac
+    esac 
+    OUTPUT_PERFDATA=true
     PERFDATA="upsBatteryStatus=$BAT_STAT"
 }
 
@@ -182,6 +171,7 @@ function output () {
             OUTPUT_DETAIL="Unexpected output: $get$upsOutputSource = $BAT_SOURCE "
             RET_CODE=$UNKNOWN;;
     esac
+    OUTPUT_PERFDATA=true
     PERFDATA="upsOutputSource=$BAT_OUTSOURCE"
 }
 
@@ -203,6 +193,7 @@ function remaining () {
         RET_CODE=$OK
     fi
     OUTPUT_DETAIL="$MIN_LEFT minutes left at $PER_LEFT""% "
+    OUTPUT_PERFDATA=true
     PERFDATA="upsEstimatedMinutesRemaining=$MIN_LEFT upsEstimatedChargeRemaining=$PER_LEFT""%"
 }
 
@@ -213,41 +204,38 @@ function load () {
         # The response is not a number!  Assume theres one line...
         NUM_LINES=1
     fi
-    
+    RET_CODE=0
     if  ! $THRESHOLDS_SET ; then
-        WARN_THRESHOLD=$Default_load_warn
-        CRIT_THRESHOLD=$Default_load_crit
-        THRESHOLDS_SET=true
+        WARN_THRESHOLD=$Default_remain_warn
+        CRIT_THRESHOLD=$Default_remain_crit
     fi
-    
-    TOP_RET_CODE=$OK
-    
     #  Add check for WARN_THRESHOLD < CRIT_THRESHOLD and both are [0..100]
     for ((i=1;i<=$NUM_LINES;i++))
     do
         LOAD_PER=`$get$upsOutputLineTable.5.$i 2>&1`
-        if [ "$LOAD_PER" -gt $WARN_THRESHOLD ] && [ "$TOP_RET_CODE" -lt "$CRITICAL" ]; then
-            if [ "$LOAD_PER" -gt $CRIT_THRESHOLD ]; then
-                TOP_RET_CODE=$CRITICAL
-            else
-              # Improve handling of multiple warnings, not just if theres >1 make it critical
-                if [ "$TOP_RET_CODE" -lt "$WARNING" ]; then
-                    TOP_RET_CODE=$WARNING
+        if $THRESHOLDS_SET ; then
+            if [ "$LOAD_PER" -gt $WARN_THRESHOLD ] && [ "$RET_CODE" -lt "$CRITICAL" ]; then
+                if [ "$LOAD_PER" -gt $CRIT_THRESHOLD ]; then
+                    RET_CODE=$CRITICAL
                 else
-                    TOP_RET_CODE=$CRITICAL
+                  # Improve handling of multiple warnings, not just if theres >1 make it critical
+                    if [ "$RET_CODE" -lt "$WARNING" ]; then
+                        RET_CODE=$WARNING
+                    else
+                        RET_CODE=$CRITICAL
+                    fi
                 fi
             fi
-        # else statement is just a confirming $CRITICAL
         fi
         OUTPUT_DETAIL=$OUTPUT_DETAIL"Line$i"":$LOAD_PER""% "
         PERFDATA=$PERFDATA"upsOutputPercentLoad.$i""=$LOAD_PER""% "
     done
-    RET_CODE=$TOP_RET_CODE
+    OUTPUT_PERFDATA=true
 }
 
 case ${TYPE_CHECK} in
     info)       info;;
-    status)       stat;;
+    stat)       stat;;
     output)     output;;
     remaining)	remaining;;
     load)       load;;
