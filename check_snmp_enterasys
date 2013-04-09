@@ -1,0 +1,159 @@
+#!/bin/bash
+
+#   Author:  Jonathan Kaiser
+#   Date:    20121029ish
+#   Purpose: Enterasys SNMP OID check for device health and returns perfdata compatible format
+#   Dependances: net-snmp
+#   Version: 0.1
+
+## Defaults
+HOSTNAME=
+SNMP_VERSION=2c
+COMMUNITY=public
+OUTPUT_PERFDATA=false
+TIMEOUT=1
+RETRY=1
+TYPE_CHECK=
+
+WARN_THRESHOLD=
+CRIT_THRESHOLD=
+THRESHOLDS_SET=false
+
+OK=0
+WARNING=1
+CRITICAL=2
+UNKNOWN=3
+OUTPUT_DETAIL=
+
+function help () {
+    echo "use : $0 -H hostname -C community -[u] -w # -c #"
+    echo ""
+    echo "  -H  : hostname or IP address of device"
+    echo "  -C  : snmp community (default:public)"
+    echo ""
+    echo "  -u  : CPU 5min utilization average"
+    echo "          threshold in percentage"
+    echo "          ... -l -w 80 -c 90"
+    echo ""
+    echo "  -w  : Warning threshhold"
+    echo "  -c  : Critical threshold"
+    echo ""
+    echo "  -h  : print this message"
+    exit $UNKNOWN
+}
+
+while getopts "H:C:uw:c:h" Input;
+do
+    case ${Input} in
+    H)      HOSTNAME=${OPTARG};;
+    C)      COMMUNITY=${OPTARG};;
+    u)      TYPE_CHECK=utilization;;
+    w)      WARN_THRESHOLD=${OPTARG};;
+    c)      CRIT_THRESHOLD=${OPTARG};;
+    h)      help;;
+    *)      echo "Invalid input"
+            exit $UNKNOWN
+            ;;
+    esac
+done
+
+if [ "$WARN_THRESHOLD" != "" ]  && [ "$CRIT_THRESHOLD" != "" ]; then
+    THRESHOLDS_SET=true
+fi
+
+get="snmpget -c "$COMMUNITY" -v "$SNMP_VERSION" -t "$TIMEOUT" -r "$RETRY" -O qv "$HOSTNAME" "
+walk="snmpwalk -c "$COMMUNITY" -v "$SNMP_VERSION" -t "$TIMEOUT" -r "$RETRY" -O qv "$HOSTNAME" "
+
+
+sysDescr=".1.3.6.1.2.1.1.1.0"
+
+#CPU
+etsysResourceCpuLoad5min=".1.3.6.1.4.1.5624.1.2.49.1.1.1.1.4"
+etsysResourceCpuLoad1min=".1.3.6.1.4.1.5624.1.2.49.1.1.1.1.3"
+etsysResourceCpuLoad5sec=".1.3.6.1.4.1.5624.1.2.49.1.1.1.1.2"
+
+#PSU
+ctChasPowerSupplyNum=".1.3.6.1.4.1.52.4.3.1.2.1.1.1"
+ctChasPowerSupplyState=".1.3.6.1.4.1.52.4.3.1.2.1.1.2"
+	#INTEGER  { infoNotAvailable ( 1 ) , notInstalled ( 2 ) , installedAndOperating ( 3 ) , installedAndNotOperating ( 4 ) } 
+ctChasPowerSupplyType=".1.3.6.1.4.1.52.4.3.1.2.1.1.3"
+	#INTEGER  { ac-dc ( 1 ) , dc-dc ( 2 ) , notSupported ( 3 ) , highOutput ( 4 ) } 
+ctChasPowerSupplyRedundancy=".1.3.6.1.4.1.52.4.3.1.2.1.1.4"
+	#INTEGER  { redundant ( 1 ) , notRedundant ( 2 ) , notSupported ( 3 ) } 
+
+#Storage - Size is in Kb!
+etsysResourceStorageDescr=".1.3.6.1.4.1.5624.1.2.49.1.3.1.1.3"
+etsysResourceStorageSize=".1.3.6.1.4.1.5624.1.2.49.1.3.1.1.4"
+etsysResourceStorageAvailable=".1.3.6.1.4.1.5624.1.2.49.1.3.1.1.5"
+
+#Fans
+ctChasFanModuleNum=".1.3.6.1.4.1.52.4.3.1.3.1.1.1"
+ctChasFanModuleState=".1.3.6.1.4.1.52.4.3.1.3.1.1.2"
+	#INTEGER  { infoNotAvailable ( 1 ) , notInstalled ( 2 ) , installedAndOperating ( 3 ) , installedAndNotOperating ( 4 ) } 
+chEnvNumFans=".1.3.6.1.4.1.52.4.1.1.8.1.11"
+chEnvFanStatus=".1.3.6.1.4.1.52.4.1.1.8.1.12.1.2"
+	#INTEGER  { unknown ( 1 ) , normal ( 2 ) , testing ( 3 ) , slow ( 4 ) , inoperative ( 5 ) , off ( 6 ) } 
+chEnvFanAdmin=".1.3.6.1.4.1.52.4.1.1.8.1.12.1.3"
+	#INTEGER  { autoMode ( 1 ) , fullSpeed ( 2 ) , testingMode ( 3 ) } 
+chEnvFanSpeed=".1.3.6.1.4.1.52.4.1.1.8.1.12.1.4"
+	# [0-100]
+
+
+
+# Connectivity Check
+check=`$get$sysDescr 2>&1`
+if [[ $check == Timeout* ]]; then
+    echo $check
+    exit $UNKNOWN
+fi
+
+function utilization () {
+    cpu5min=(`$walk$etsysResourceCpuLoad5min`)
+    RET_CODE=$OK
+    i=0
+    for c in "${cpu5min[@]}" ; do
+        acpu=$(echo "scale=1; $c / 10" | bc -l)
+        if $THRESHOLDS_SET ; then
+            if [ "$acpu" -gt "$WARN_THRESHOLD" ] && [ "$RET_CODE" -lt "$CRITICAL" ] ; then
+                if [ "$acpu" -gt "$CRIT_THRESHOLD" ] ; then
+                    RET_CODE=$CRITICAL
+                else
+                    if [ "$RET_CODE" -lt "$WARNING" ]; then
+                        RET_CODE=$WARNING
+                    else
+                        RET_CODE=$CRITICAL
+                    fi
+                fi
+            fi
+        fi
+        (( i++ ))
+        OUTPUT_DETAIL=$OUTPUT_DETAIL"CPU$i"":$acpu""% "
+        PERFDATA=$PERFDATA"etsysResourceCpuLoad5min.$i""=$acpu""% "
+    done
+}
+
+
+case ${TYPE_CHECK} in
+    utilization)       utilization;;
+    *)          exit $UNKNOWN;;
+esac
+
+case $RET_CODE in
+    0)
+        NAGIOS_OUT="OK: $OUTPUT_DETAIL";;
+    1)
+        NAGIOS_OUT="WARNING: $OUTPUT_DETAIL";;
+    2)
+        NAGIOS_OUT="CRITICAL: $OUTPUT_DETAIL";;
+    *)
+        NAGIOS_OUT="UNKNOWN: $OUTPUT_DETAIL";;
+esac
+
+if $OUTPUT_PERFDATA ; then
+       echo $NAGIOS_OUT"| "$PERFDATA
+else
+       echo $NAGIOS_OUT
+fi
+
+exit $RET_CODE
+
