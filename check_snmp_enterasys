@@ -26,14 +26,22 @@ UNKNOWN=3
 OUTPUT_DETAIL=
 
 function help () {
-    echo "use : $0 -H hostname -C community -[u] -w # -c #"
+    echo "use : $0 -H hostname -C community -x check_type -w # -c #"
     echo ""
     echo "  -H  : hostname or IP address of device"
     echo "  -C  : snmp community (default:public)"
     echo ""
-    echo "  -u  : CPU 5min utilization average"
-    echo "          threshold in percentage"
-    echo "          ... -l -w 80 -c 90"
+    echo "  -x  : check_type options
+    echo ""
+    echo "        utilization   : CPU 5min utilization average"
+    echo "                          thresholds [1..100] in percentage"
+    echo ""
+    echo "        PSU           : PSU status"
+    echo "        storage       : Storage status"
+    echo "                          thresholds [1..100] in percentage"
+    echo "        fan           : Fan status"
+    echo ""
+    echo "        environmental : Display PSU, Storage, Fan status"
     echo ""
     echo "  -w  : Warning threshhold"
     echo "  -c  : Critical threshold"
@@ -42,12 +50,12 @@ function help () {
     exit $UNKNOWN
 }
 
-while getopts "H:C:uw:c:h" Input;
+while getopts "H:C:x:w:c:h" Input;
 do
     case ${Input} in
     H)      HOSTNAME=${OPTARG};;
     C)      COMMUNITY=${OPTARG};;
-    u)      TYPE_CHECK=utilization;;
+    x)      TYPE_CHECK=${OPTARG};;
     w)      WARN_THRESHOLD=${OPTARG};;
     c)      CRIT_THRESHOLD=${OPTARG};;
     h)      help;;
@@ -98,8 +106,6 @@ chEnvFanAdmin=".1.3.6.1.4.1.52.4.1.1.8.1.12.1.3"
 chEnvFanSpeed=".1.3.6.1.4.1.52.4.1.1.8.1.12.1.4"
 	# [0-100]
 
-
-
 # Connectivity Check
 check=`$get$sysDescr 2>&1`
 if [[ $check == Timeout* ]]; then
@@ -107,7 +113,13 @@ if [[ $check == Timeout* ]]; then
     exit $UNKNOWN
 fi
 
-function utilization () {
+########################################
+#  CPU Utilization Check (default 5min)
+#   eg. CRITICAL: CPU1 99%
+#       WARNING: CPU1 85%
+#       OK: 2 CPUs
+########################################
+function util () {
     cpu5min=(`$walk$etsysResourceCpuLoad5min`)
     RET_CODE=$OK
     i=0
@@ -132,10 +144,55 @@ function utilization () {
     done
 }
 
+########################################
+#  PSU Status Check
+#   eg. Critical: PSU 1 installedAndNotOperating
+#       OK: 1 PSU
+########################################
+function psu () {
+    #To Do!
+}
+
+########################################
+#  Storage Utilization Check
+#   eg. Critical: SmallDrive 99% Used, 99Kb/100Kb
+#       Warning: NVRAM 85% Used, 85Kb/100Kb
+#       OK: Flash 10% Used, 10Kb/100Kb
+########################################
+function stor () {
+    #To Do!
+}
+
+########################################
+#  Fan Status Check
+#   eg. Warning: Fan 2 unknown
+#       OK: 2 Fans
+########################################
+function fan () {
+    #To Do!
+}
+
+########################################
+#  Environmental Check
+#   Single output for PSUs, Storage devices and Fans
+#   eg. Critical: PSU 1 installedAndNotOperating
+#       Warning: Fan 2 unknown
+#       OK: 1 PSU, 1 Storage, 2 Fans
+########################################
+function env () {
+    #To Do!
+    #  Run psu, stor, fan
+}
 
 case ${TYPE_CHECK} in
-    utilization)       utilization;;
-    *)          exit $UNKNOWN;;
+    utilization)      util;;
+    environment)      env;;
+    PSU)              psu;;
+    storage)          stor;;
+    fan)              fan;;
+    *)
+        echo "Not a valid type_check: $TYPE_CHECK"
+        help;;
 esac
 
 case $RET_CODE in
@@ -156,4 +213,3 @@ else
 fi
 
 exit $RET_CODE
-
