@@ -1,0 +1,264 @@
+#!/bin/bash
+
+#   Author:  Jonathan Kaiser
+#   Date:    2013
+#   Purpose: Standard SNMP OID check for room alert devices and returns perfdata compatible format
+#   Dependances: net-snmp
+#   Version: 0.1
+
+## Defaults
+HOSTNAME=
+SNMP_VERSION=1
+COMMUNITY="public"
+OUTPUT_PERFDATA=false
+TIMEOUT=1
+RETRY=1
+
+MODEL=""
+UNIT="F"
+oid_internal_temp=
+oid_external_temp=
+humidity=
+
+WARN_THRESHOLD=
+CRIT_THRESHOLD=
+
+OK=0
+WARNING=1
+CRITICAL=2
+UNKNOWN=3
+OUTPUT_DETAIL=
+RET_CODE=$OK
+
+########################################
+#  help () function!  #
+########################################
+function help () {
+	echo "use : $0 -H hostname -C community -v [1|2c] -x check_type -m [7E|24E] -u [F|C] -p -h"
+	echo ""
+	echo "  -H  : hostname or IP address of ups device"
+	echo "  -C  : snmp community (default:public)"
+	echo "  -v  : snmp version (default:1)"
+	echo ""
+	echo "  -x  : what check_type to perform"
+	echo "		info  : Retrieve some device information"
+	echo "		internal  : Internal environment checks"
+	echo "		external  : External environment checks"
+	echo ""
+	echo "  -m  : Model types supported; 7E, 24E"
+	echo ""
+	echo "  -u  : Which unit of measure (default: F)"
+	echo ""
+	echo "  -p  : Include perfdata"
+	echo ""
+	echo "  -h  : print this message"
+	exit $UNKNOWN
+}
+
+########################################
+#  info ()  #
+#    Provides some overall information about the device  #
+#    including clickable link and a device type guess  #
+########################################
+function info () {
+	Device_Name=$($get$sysDescr 2>&1 | tr -d "\"")
+	OUTPUT_DETAIL=$Device_Name", RoomAlert $MODEL <br/><a target=\"_blank\" href=\"http://$HOSTNAME\">http://$HOSTNAME</a>"
+	return $OK
+}
+
+########################################
+# Device Type guess
+#    Try to guess the device type  #
+########################################
+function deviceguess () {
+	maybe7E=".1.3.6.1.4.1.20916.1.2.1.1.1.0"
+	maybe24E=".1.3.6.1.4.1.20916.1.5.1.1.1.1.0"
+	
+	guess=$($get$maybe7E 2>&1)
+	if [ $? -eq 0 ]; then
+		MODEL="7E"
+		return $OK
+	fi
+	
+	guess=$($get$maybe24E 2>&1)
+	if [ $? -eq 0 ]; then
+		MODEL="24E"
+		return $OK
+	fi
+	
+	return 1
+}
+
+########################################
+#  setmodel ()
+#    Set the proper variables for specified model  #
+#
+#	multi step process
+#		1- guess model if not specified
+#		2- set global variables depending on device OID's
+#		3- set script temperatures based on unit
+#
+########################################
+function setmodel () {
+
+	if [ "$MODEL" == "" ]; then
+		deviceguess
+		if [ $? -ne $OK ]; then
+			echo "Enter a supported Model type"
+			exit $UNKNOWN
+		fi
+	fi
+	
+	case $MODEL in
+	"7E")
+		internaltempc=".1.3.6.1.4.1.20916.1.2.1.1.1.0"
+		externaltempc=".1.3.6.1.4.1.20916.1.2.1.1.2.0"
+		internaltempf=".1.3.6.1.4.1.20916.1.2.1.1.5.0"
+		externaltempf=".1.3.6.1.4.1.20916.1.2.1.1.6.0"
+		# Device Thresholds
+		internalhigh=".1.3.6.1.4.1.20916.1.2.3.1.0"
+		internallow=".1.3.6.1.4.1.20916.1.2.3.2.0"
+		externalhigh=".1.3.6.1.4.1.20916.1.2.3.3.0"
+		externallow=".1.3.6.1.4.1.20916.1.2.3.4.0";;
+	"24E")
+		internaltempf=".1.3.6.1.4.1.20916.1.5.1.1.1.1.0"
+		internaltempc=".1.3.6.1.4.1.20916.1.5.1.1.1.2.0"
+		internalhumidity=".1.3.6.1.4.1.20916.1.5.1.1.2.1.0"
+		internalheatindexf=".1.3.6.1.4.1.20916.1.5.1.1.3.1.0"
+		internalheatindexc=".1.3.6.1.4.1.20916.1.5.1.1.3.2.0"
+		externaltempc=".1.3.6.1.4.1.20916.1.5.1.2.1.1.0"
+		externaltempf=".1.3.6.1.4.1.20916.1.5.1.2.1.2.0";;
+	*)
+		echo "Enter a supported Model type, $MODEL is not valid"
+		exit $UNKNOWN;;
+	esac
+	
+	case $UNIT in
+		"F")
+			oid_internal_temp=$internaltempf
+			oid_external_temp=$externaltempf;;
+		*)
+			oid_internal_temp=$internaltempc
+			oid_external_temp=$externaltempc;;
+	esac
+	
+	return $OK
+}
+
+########################################
+#  checkenv ()
+#		Check the passed environmental check
+#		This check should be oblivious to unit in computation
+########################################
+function checkenv () {
+
+	case $1 in
+		"Internal")
+			value=$($get$oid_internal_temp 2>&1)
+			thisunit=$UNIT;;
+		"Humidity")
+			value=$($get$internalhumidity 2>&1)
+			thisunit="%";;
+		"External")
+			value=$($get$oid_external_temp 2>&1)
+			thisunit=$UNIT;;
+		*)
+			return $UNKNOWN;;
+	esac
+	
+	# convert to 2 digit if output is the default 4 digit, i.e. 7769 = 77.69
+	if [ ${#value} -eq 4 ]; then
+		value=$(echo $value | sed 's/..$/.&/;t;s/^.$/.0&/')
+	fi
+	
+	if [ -n "$OUTPUT_DETAIL" ]; then
+		# Theres already existing detail, lets insert a deliminator
+		OUTPUT_DETAIL=$OUTPUT_DETAIL", "$1" "$value$thisunit
+	else
+		OUTPUT_DETAIL=$1" "$value$thisunit
+	fi
+	
+	PERFDATA=$PERFDATA$1"="$value" "
+	
+	return $OK
+}
+
+
+while getopts "H:C:v:x:m:u:ph" Input;
+do
+	case ${Input} in
+		H)	HOSTNAME=${OPTARG};;
+		C)	COMMUNITY=${OPTARG};;
+		v)	SNMP_VERSION=${OPTARG};;
+		x)	checktype=${OPTARG};;
+		m)	MODEL=${OPTARG};;
+		u)	UNIT=${OPTARG};;
+		p)	OUTPUT_PERFDATA=true;;
+		h)	help;;
+		*)      echo "Invalid argument: ${OPTARG}"
+			help
+			;;
+	esac
+done
+
+if [ "$SNMP_VERSION" != "1" ] && [ "$SNMP_VERSION" != "2c" ]; then
+	echo "Bad SNMP version value: $SNMP_VERSION"
+	exit $UNKNOWN
+fi
+
+if [ "$UNIT" != "F" ] && [ "$UNIT" != "C" ]; then
+	echo "Bad unit of measurement: $UNIT"
+	exit $UNKNOWN
+fi
+
+get="snmpget -c "$COMMUNITY" -v "$SNMP_VERSION" -t "$TIMEOUT" -r "$RETRY" -O qv "$HOSTNAME" "
+
+# Connectivity Check
+sysDescr=".1.3.6.1.2.1.1.1.0"
+device=$($get$sysDescr 2>&1)
+if [[ $device == Timeout* ]]; then
+	echo "UNKNOWN: $device"
+	exit $UNKNOWN
+fi
+
+setmodel
+
+case $checktype in
+	"info")
+		info
+		;;
+	"internal")
+		checkenv "Internal"
+		if [ -n "$internalhumidity" ]; then
+			checkenv "Humidity"
+		fi
+		;;
+	"external")
+		checkenv "External"
+		;;
+	*)
+		echo "Check_type $checktype is not valid"
+		exit $UNKNOWN
+		;;
+esac
+		
+
+case $RET_CODE in
+	0)
+		NAGIOS_OUT="OK: $OUTPUT_DETAIL";;
+	1)
+		NAGIOS_OUT="WARNING: $OUTPUT_DETAIL";;
+	2)
+		NAGIOS_OUT="CRITICAL: $OUTPUT_DETAIL";;
+	*)
+		NAGIOS_OUT="UNKNOWN: $OUTPUT_DETAIL";;
+esac
+
+if $OUTPUT_PERFDATA && [ -n "$PERFDATA" ]; then
+	echo $NAGIOS_OUT" | "$PERFDATA
+else
+	echo $NAGIOS_OUT
+fi
+
+exit $RET_CODE
+

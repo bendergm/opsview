@@ -14,6 +14,7 @@ OUTPUT_PERFDATA=false
 TIMEOUT=1
 RETRY=1
 TYPE_CHECK=
+REFACTOR=false
 
 WARN_THRESHOLD=
 CRIT_THRESHOLD=
@@ -33,7 +34,7 @@ RET_CODE=$OK
 
 function help ()
 {
-    echo "use : $0 -H hostname -C community -[i|s|o|r|l] -w ## -c ##"
+    echo "use : $0 -H hostname -C community -[i|s|o|r|l] -f -w ## -c ##"
     echo ""
     echo "  -H  : hostname or IP address of ups device"
     echo "  -C  : snmp community (default:public)"
@@ -48,6 +49,8 @@ function help ()
     echo "          threshold in percentage"
     echo "          default: -w $Default_load_warn -c $Default_load_crit"
     echo ""
+    echo "  -f  : Refactor the load output by 1/10"
+    echo ""
     echo "  -w  : Warning threshhold"
     echo "  -c  : Critical threshold"
     echo ""
@@ -55,7 +58,7 @@ function help ()
     exit $UNKNOWN
 }
 
-while getopts "H:C:isorlw:c:h" Input;
+while getopts "H:C:isorlfw:c:h" Input;
 do
     case ${Input} in
     H)      HOSTNAME=${OPTARG};;
@@ -65,6 +68,7 @@ do
     o)      TYPE_CHECK=output;;
     r)      TYPE_CHECK=remaining;;
     l)      TYPE_CHECK=load;;
+    f)      REFACTOR=true;;
     w)      WARN_THRESHOLD=${OPTARG};;
     c)      CRIT_THRESHOLD=${OPTARG};;
     h)      help;;
@@ -218,6 +222,9 @@ function load () {
     for ((i=1;i<=$NUM_LINES;i++))
     do
         LOAD_PER=$($get$upsOutputLineTable.5.$i 2>&1)
+        if $REFACTOR; then
+            LOAD_PER=$(echo $LOAD_PER | sed 's/.$/.&/;t;s/^.$/.0&/')
+        fi
         if $THRESHOLDS_SET ; then
             if [ "$LOAD_PER" -gt $WARN_THRESHOLD ] && [ "$RET_CODE" -lt "$CRITICAL" ]; then
                 if [ "$LOAD_PER" -gt $CRIT_THRESHOLD ]; then
