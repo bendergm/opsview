@@ -10,6 +10,7 @@
 HOSTNAME=
 SNMP_VERSION=2c
 COMMUNITY=public
+HTTP=false
 OUTPUT_PERFDATA=false
 TIMEOUT=1
 RETRY=1
@@ -26,47 +27,50 @@ UNKNOWN=3
 OUTPUT_DETAIL=
 
 function help () {
-    echo "use : $0 -H hostname -C community -x check_type -w # -c #"
-    echo ""
-    echo "  -H  : hostname or IP address of device"
-    echo "  -C  : snmp community (default:public)"
-    echo ""
-    echo "  -x  : check_type options
-    echo ""
-    echo "        utilization   : CPU 5min utilization average"
-    echo "                          thresholds [1..100] in percentage"
-    echo ""
-    echo "        PSU           : PSU status"
-    echo "        storage       : Storage status"
-    echo "                          thresholds [1..100] in percentage"
-    echo "        fan           : Fan status"
-    echo ""
-    echo "        environmental : Display PSU, Storage, Fan status"
-    echo ""
-    echo "  -w  : Warning threshhold"
-    echo "  -c  : Critical threshold"
-    echo ""
-    echo "  -h  : print this message"
-    exit $UNKNOWN
+	echo "use : $0 -H hostname -C community -x check_type -w # -c #"
+	echo ""
+	echo "  -H  : hostname or IP address of device"
+	echo "  -C  : snmp community (default:public)"
+	echo ""
+	echo "  -x  : check_type options"
+	echo ""
+	echo "        CPU           : CPU 5min utilization average"
+	echo "                          thresholds [1..100] in percentage"
+	echo "        PSU           : PSU status"
+	#echo "        storage       : Storage status"
+	#echo "                          thresholds [1..100] in percentage"
+	echo "        fan           : Fan status"
+	echo ""
+	#echo "        environmental : Display PSU, Storage, Fan status"
+	#echo ""
+	echo "  -p  : Include perfdata"
+	echo "  -t  : Format with HTTP line breaks"
+	echo "  -w  : Warning threshhold"
+	echo "  -c  : Critical threshold"
+	echo ""
+	echo "  -h  : print this message"
+	exit $UNKNOWN
 }
 
-while getopts "H:C:x:w:c:h" Input;
+while getopts "H:C:x:tpw:c:h" Input;
 do
-    case ${Input} in
-    H)      HOSTNAME=${OPTARG};;
-    C)      COMMUNITY=${OPTARG};;
-    x)      TYPE_CHECK=${OPTARG};;
-    w)      WARN_THRESHOLD=${OPTARG};;
-    c)      CRIT_THRESHOLD=${OPTARG};;
-    h)      help;;
-    *)      echo "Invalid input"
-            exit $UNKNOWN
-            ;;
-    esac
+	case ${Input} in
+	H)      HOSTNAME=${OPTARG};;
+	C)      COMMUNITY=${OPTARG};;
+	x)      TYPE_CHECK=${OPTARG};;
+	t)	HTTP=true;;
+	p)      OUTPUT_PERFDATA=true;;
+	w)      WARN_THRESHOLD=${OPTARG};;
+	c)      CRIT_THRESHOLD=${OPTARG};;
+	h)      help;;
+	*)      echo "Invalid input"
+			exit $UNKNOWN
+			;;
+	esac
 done
 
 if [ "$WARN_THRESHOLD" != "" ]  && [ "$CRIT_THRESHOLD" != "" ]; then
-    THRESHOLDS_SET=true
+	THRESHOLDS_SET=true
 fi
 
 get="snmpget -c "$COMMUNITY" -v "$SNMP_VERSION" -t "$TIMEOUT" -r "$RETRY" -O qv "$HOSTNAME" "
@@ -89,7 +93,7 @@ ctChasPowerSupplyType=".1.3.6.1.4.1.52.4.3.1.2.1.1.3"
 ctChasPowerSupplyRedundancy=".1.3.6.1.4.1.52.4.3.1.2.1.1.4"
 	#INTEGER  { redundant ( 1 ) , notRedundant ( 2 ) , notSupported ( 3 ) } 
 
-#Storage - Size is in Kb!
+#Storage - Size is in Kb
 etsysResourceStorageDescr=".1.3.6.1.4.1.5624.1.2.49.1.3.1.1.3"
 etsysResourceStorageSize=".1.3.6.1.4.1.5624.1.2.49.1.3.1.1.4"
 etsysResourceStorageAvailable=".1.3.6.1.4.1.5624.1.2.49.1.3.1.1.5"
@@ -107,10 +111,10 @@ chEnvFanSpeed=".1.3.6.1.4.1.52.4.1.1.8.1.12.1.4"
 	# [0-100]
 
 # Connectivity Check
-check=`$get$sysDescr 2>&1`
+check=$($get$sysDescr 2>&1)
 if [[ $check == Timeout* ]]; then
-    echo $check
-    exit $UNKNOWN
+	echo $check
+	exit $UNKNOWN
 fi
 
 ########################################
@@ -119,38 +123,127 @@ fi
 #       WARNING: CPU1 85%
 #       OK: 2 CPUs
 ########################################
-function util () {
-    cpu5min=(`$walk$etsysResourceCpuLoad5min`)
-    RET_CODE=$OK
-    i=0
-    for c in "${cpu5min[@]}" ; do
-        acpu=$(echo "scale=1; $c / 10" | bc -l)
-        if $THRESHOLDS_SET ; then
-            if [ "$acpu" -gt "$WARN_THRESHOLD" ] && [ "$RET_CODE" -lt "$CRITICAL" ] ; then
-                if [ "$acpu" -gt "$CRIT_THRESHOLD" ] ; then
-                    RET_CODE=$CRITICAL
-                else
-                    if [ "$RET_CODE" -lt "$WARNING" ]; then
-                        RET_CODE=$WARNING
-                    else
-                        RET_CODE=$CRITICAL
-                    fi
-                fi
-            fi
-        fi
-        (( i++ ))
-        OUTPUT_DETAIL=$OUTPUT_DETAIL"CPU$i"":$acpu""% "
-        PERFDATA=$PERFDATA"etsysResourceCpuLoad5min.$i""=$acpu""% "
-    done
+function cpu () {
+	cpu5min=$($walk$etsysResourceCpuLoad5min)
+	cpu1min=$($walk$etsysResourceCpuLoad1min)
+	cpu5sec=$($walk$etsysResourceCpuLoad5sec)
+	RET_CODE=$OK
+	i=0
+	OUTPUT_DETAIL=$OUTPUT_DETAIL"5min: "
+	for c in ${cpu5min[@]}
+	do
+		acpu=$(echo "scale=1; $c / 10" | bc -l)
+		#acpu=$(echo $c | sed 's/.$/.&/;t;s/^.$/.0&/')
+		if $THRESHOLDS_SET ; then
+			if [[ "$acpu" > "$WARN_THRESHOLD" ]] && [[ "$RET_CODE" < "$CRITICAL" ]] ; then
+				if [[ "$acpu" > "$CRIT_THRESHOLD" ]] ; then
+					RET_CODE=$CRITICAL
+				else
+					if [[ "$RET_CODE" < "$WARNING" ]] ; then
+						RET_CODE=$WARNING
+					else
+						RET_CODE=$CRITICAL
+					fi
+				fi
+			fi
+		fi
+		(( i++ ))
+		OUTPUT_DETAIL=$OUTPUT_DETAIL"CPU"$i":"$acpu"% "
+		PERFDATA=$PERFDATA"CPU"$i"="$acpu"% "
+	done
+	if $HTTP ; then
+		OUTPUT_DETAIL=$OUTPUT_DETAIL"<br/>"
+	else
+		OUTPUT_DETAIL=$OUTPUT_DETAIL"\n"
+	fi
+	i=0
+	OUTPUT_DETAIL=$OUTPUT_DETAIL"1min: "
+	for c in ${cpu1min[@]}
+        do
+		acpu=$(echo "scale=1; $c / 10" | bc -l)
+		(( i++ ))
+		OUTPUT_DETAIL=$OUTPUT_DETAIL"CPU"$i":"$acpu"% "
+        done
+        if $HTTP ; then
+		OUTPUT_DETAIL=$OUTPUT_DETAIL"<br/>"
+	else 
+		OUTPUT_DETAIL=$OUTPUT_DETAIL"\n"
+	fi
+        i=0
+	OUTPUT_DETAIL=$OUTPUT_DETAIL"5sec: "
+        for c in ${cpu5sec[@]}
+        do
+                acpu=$(echo "scale=1; $c / 10" | bc -l)
+		(( i++ ))
+                OUTPUT_DETAIL=$OUTPUT_DETAIL"CPU"$i":"$acpu"% "
+        done
 }
 
 ########################################
 #  PSU Status Check
-#   eg. Critical: PSU 1 installedAndNotOperating
-#       OK: 1 PSU
+#   eg. Critical: installedAndNotOperating PSUs: 1
+#       OK: Installed and operating PSUs: 1
 ########################################
 function psu () {
-    #To Do!
+
+	psunums=$($walk$ctChasPowerSupplyNum)
+	
+	if [[ $psunums == No* ]] ; then
+		OUTPUT_DETAIL="PSU data not available"
+		return $OK
+	fi
+	
+	operatingpsus=""
+	notoperatingpsus=""
+	
+	for eachpsu in ${psunums[@]}
+	do
+		thispsuState=$($get$ctChasPowerSupplyState"."$eachpsu)
+		thispsuType=$($get$ctChasPowerSupplyType"."$eachpsu)
+		thispsuTypeName=""
+		#echo "Checking "$eachpsu": "$thispsuState
+		#thispsuType=$($get$ctChasPowerSupplyType"."$eachpsu)
+		#TO DO!!!  Add output for denoting PSU Type
+		case $thispsuType in
+			1)	thispsuTypeName="AC";;
+			2)	thispsuTypeName="DC";;
+			3)	thispsuTypeName="notSupported";;
+			4)	thispsuTypeName="highOutput";;
+			*)	thispsuTypeName="Unknown";;
+		esac
+		if [[ "$thispsuType" != "3" ]] ; then
+			#Skipped unsupported PSUs
+			case $thispsuState in
+				1) #info not available
+					uninteresting=true;;
+				2) #not installed
+					uninteresting=true;;
+				3) #installed and operating
+					operatingpsus=$operatingpsus" "$eachpsu"("$thispsuTypeName")"
+					PERFDATA=$PERFDATA"PSU"$eachpsu"="$thispsuState" ";;
+				4) #installed and not operating
+					notoperatingpsus=$notoperatingpsus" "$eachpsu"("$thispsuTypeName")"
+					RET_CODE=$CRITICAL
+					PERFDATA=$PERFDATA"PSU"$eachpsu"="$thispsuState" ";;
+				*) #unkown, come back to this... To Do
+					uninteresting=true;;
+			esac
+		fi
+		
+	done
+	
+	if [[ "$notoperatingpsus" != "" ]] ; then
+		OUTPUT_DETAIL="Installed and not operating PSUs:"$notoperatingpsus
+		if $HTTP ; then 
+			OUTPUT_DETAIL=$OUTPUT_DETAIL"<br/>" 
+		else 
+			OUTPUT_DETAIL=$OUTPUT_DETAIL"\n"
+		fi
+		OUTPUT_DETAIL=$OUTPUT_DETAIL"Installed and operating PSUs:"$operatingpsus
+	else
+		OUTPUT_DETAIL="Installed and operating PSUs:"$operatingpsus
+		RET_CODE=$OK
+	fi
 }
 
 ########################################
@@ -160,7 +253,9 @@ function psu () {
 #       OK: Flash 10% Used, 10Kb/100Kb
 ########################################
 function stor () {
-    #To Do!
+	#To Do!
+	OUTPUT_DETAIL="Checking the storage is in development"
+	RET_CODE=$UNKNOWN
 }
 
 ########################################
@@ -169,7 +264,49 @@ function stor () {
 #       OK: 2 Fans
 ########################################
 function fan () {
-    #To Do!
+	
+	fannums=$($walk$ctChasFanModuleNum)
+	
+	if [[ $fannums == No* ]] ; then
+		#OUTPUT_DETAIL=$ctChasFanModuleNum" = "$fannums
+		OUTPUT_DETAIL="Fan data not available"
+		return $OK
+	fi
+	
+	operatingfans=""
+	notoperatingfans=""
+	
+	for eachfan in ${fannums[@]}
+	do
+		thisfanState=$($get$ctChasFanModuleState"."$eachfan)
+		#echo "Checking "$eachfan": "$thisfanState
+		case $thisfanState in
+			1) #info not available
+				uninteresting=true;;
+			2) #not installed
+				uninteresting=true;;
+			3) #installed and operating
+				operatingfans=$operatingfans" "$eachfan
+				PERFDATA=$PERFDATA"fan"$eachfan"="$thisfanState" ";;
+			4) #installed and not operating
+				notoperatingfans=$notoperatingfans" "$eachfan
+				RET_CODE=$CRITICAL
+				PERFDATA=$PERFDATA"fan"$eachfan"="$thisfanState" ";;
+			*) #unkown, come back to this... To Do
+				uninteresting=true;;
+		esac
+		
+	done
+	
+	if [[ "$notoperatingfans" != "" ]] ; then
+		OUTPUT_DETAIL="Installed and not operating fans:"$notoperatingfans
+		if [[ $check == Enterasys*D2* ]] ; then 
+			RET_CODE=$OK 
+		fi
+	else
+		OUTPUT_DETAIL="Installed and operating fans:"$operatingfans
+		RET_CODE=$OK
+	fi
 }
 
 ########################################
@@ -179,37 +316,54 @@ function fan () {
 #       Warning: Fan 2 unknown
 #       OK: 1 PSU, 1 Storage, 2 Fans
 ########################################
-function env () {
-    #To Do!
-    #  Run psu, stor, fan
+function enviro () {
+	cpu
+	CPUSTAT=$OUTPUT_DETAIL
+	ENVIRORET=$RET_CODE
+	psu
+	PSUSTAT=$OUTPUT_DETAIL
+	if [[ "$RET_CODE" > "$ENVIRORET" ]] ; then
+		ENVIRORET=$RET_CODE
+	fi
+	fan
+	FANSTAT=$OUTPUT_DETAIL
+	if [[ "$RET_CODE" > "$ENVIRORET" ]] ; then
+                ENVIRORET=$RET_CODE
+        fi
+	if $HTTP ; then
+                OUTPUT_DETAIL=$CPUSTAT"<br/>"$PSUSTAT"<br/>"$FANSTAT
+        else
+                OUTPUT_DETAIL=$CPUSTAT"\n"$PSUSTAT"\n"$FANSTAT
+        fi
+	RET_CODE=$ENVIRORET
 }
 
 case ${TYPE_CHECK} in
-    utilization)      util;;
-    environment)      env;;
-    PSU)              psu;;
-    storage)          stor;;
-    fan)              fan;;
-    *)
-        echo "Not a valid type_check: $TYPE_CHECK"
-        help;;
+	CPU)             cpu;;
+	environment)     enviro;;
+	PSU)             psu;;
+	storage)          stor;;
+	fan)              fan;;
+	*)
+		echo "Not a valid type_check: $TYPE_CHECK"
+		exit $UNKNOWN;;
 esac
 
 case $RET_CODE in
-    0)
-        NAGIOS_OUT="OK: $OUTPUT_DETAIL";;
-    1)
-        NAGIOS_OUT="WARNING: $OUTPUT_DETAIL";;
-    2)
-        NAGIOS_OUT="CRITICAL: $OUTPUT_DETAIL";;
-    *)
-        NAGIOS_OUT="UNKNOWN: $OUTPUT_DETAIL";;
+	0)
+		NAGIOS_OUT="OK: $OUTPUT_DETAIL";;
+	1)
+		NAGIOS_OUT="WARNING: $OUTPUT_DETAIL";;
+	2)
+		NAGIOS_OUT="CRITICAL: $OUTPUT_DETAIL";;
+	*)
+		NAGIOS_OUT="UNKNOWN: $OUTPUT_DETAIL";;
 esac
 
-if $OUTPUT_PERFDATA ; then
-       echo $NAGIOS_OUT"| "$PERFDATA
+if $OUTPUT_PERFDATA && [ -n "$PERFDATA" ] ; then
+	   echo -e $NAGIOS_OUT" | "$PERFDATA
 else
-       echo $NAGIOS_OUT
+	   echo -e $NAGIOS_OUT
 fi
 
 exit $RET_CODE
